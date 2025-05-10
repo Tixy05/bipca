@@ -1,4 +1,11 @@
 // BIPCA - "BIPCA" Interpreter for Programs in Custom Assembler
+// in the main file do this:
+// #define BIPCA_IMPLEMENTATION
+// #include "bipca.h"
+
+#ifndef BIPCA_H
+#define BIPCA_H
+
 #include <stdint.h>
 #include <malloc.h>
 #include <strings.h>
@@ -7,7 +14,7 @@
 #include <string.h>
 #include <limits.h>
 
-#define DEBUG 1
+#define DEBUG 0
 #define LOG_DEBUG(fmt, ...) \
     do { if (DEBUG) fprintf(stdout, "[DEBUG]: " fmt, ##__VA_ARGS__); } while (0)
 #define LOG_INFO(fmt, ...) fprintf(stdout, "[INFO]: " fmt, ##__VA_ARGS__)
@@ -94,6 +101,8 @@ typedef enum {
 
 typedef enum {
     NO_ERROR,
+    
+    ERR_GENERIC_ERROR,
 
     ERR_UNKNOWN_IDENT,
     ERR_TOO_MANY_IDENTS,
@@ -143,6 +152,90 @@ struct {
     } table[MAX_N_IDENT];
 } identMap = {0};
 
+struct {
+    char fileName[MAX_FILENAME_LENGTH + 1];
+    char text[PROGRAM_TEXT_SIZE];
+    size_t size;
+    size_t observed;
+    Position position;
+} program = {0};
+
+Word current = RESERVED;
+Word oldCurrent = RESERVED;
+
+typedef struct {
+    char name[PLUGIN_NAME_MAX_LENGTH + 1];
+    bool (*InitPlugin)(void**);
+    void (*BeforeExecution)(void*, Command);
+    void (*AfterExecution)(void*, Command);
+} Plugin;
+
+struct {
+    Plugin plugins[N_MAX_PLUGINS];
+    size_t size;
+    void* userDataPointers[N_MAX_PLUGINS];
+} plugins = {0};
+
+struct {
+    Word IP;
+    Word SP;
+    Word FP;
+    Word RV;
+} registers = {
+    .IP = RESERVED,
+    .SP = SIZE,
+    .FP = UNDEF,
+    .RV = UNDEF,
+};
+
+typedef struct {
+    bool stepByStepInterpretation;
+} InterpretParams;
+
+/*
+user-unfriendly API: if one wants to shoot themselves 
+in the leg, one very well could. Every function is a part
+of a public API, so use them wisely
+*/
+
+void PrintInstructionCoords(Word instructionIndex);
+size_t _Hash(char* str);
+Error NewIdent(const char* key, IdentInfo value);
+bool GetIdent(const char* key, IdentInfo* value);
+void InitIdentMap(void);
+void ResetPosition(void);
+Error ReadProgram(const char *filename);
+bool IsDigit(char c);
+bool IsLetter(char c);
+bool IsAlphaNumeric(char c);
+bool IsWhitespace(char c);
+bool IsAllowedChar(char c);
+char CurrentChar();
+void SkipUnnecessary();
+void ShowIdents(void);
+void _PrintLocationAndError();
+void _PrintError(void);
+void ReportError(Error err);
+void RestoreCurrentAfterFirstPass();
+Error ParseIdent(char* identBuffer);
+Error FirstPass(void);
+bool GetProgramSize(Word* ProgramSize);
+Error SecondPass(void);
+bool PrintProgram(void);
+bool TranslateProgram(void);
+bool TranslateFromFile(char *filename);
+bool TranslateFromFiles(int nFiles, char *filenames[]);
+Error AddPlugin(Plugin* p);
+bool PLUGIN_INIT_DUMMY(void** addr);
+void PLUGIN_BEFORE_EXEC_DUMMY(void* addr, Command cmd);
+void PLUGIN_AFTER_EXEC_DUMMY(void* addr, Command cmd);
+Word Interpret(InterpretParams p);
+
+#endif // BIPCA_H
+
+#ifdef BIPCA_IMPLEMENTATION
+#undef BIPCA_IMPLEMENTATION
+
 void PrintInstructionCoords(Word instructionIndex) {
     Coord c = coords[instructionIndex];
     printf(TEXT_BOLD("%s:%zu:%zu: "), files[c.filenameIndex], c.pos.row + 1, c.pos.col + 1);
@@ -184,7 +277,7 @@ bool GetIdent(const char* key, IdentInfo* value) {
     
     while (identMap.table[idx].occupied) {
         if (strcmp(identMap.table[idx].key, key) == 0) {
-            if (value != NULL) *value = identMap.table[idx].value;
+            if (value != NULL) { *value = identMap.table[idx].value; }
             return true;
         }
         idx = (idx + 1) % MAX_N_IDENT;
@@ -247,14 +340,6 @@ void InitIdentMap(void) {
     ADD_KEYWORD_IDENT(OUT);
     ADD_KEYWORD_IDENT(HALT);
 }
-
-struct {
-    char fileName[MAX_FILENAME_LENGTH + 1];
-    char text[PROGRAM_TEXT_SIZE];
-    size_t size;
-    size_t observed;
-    Position position;
-} program = {0};
 
 void ResetPosition(void) {
     program.position = (Position) {0, 0};
@@ -329,6 +414,8 @@ void SkipUnnecessary() {
             program.observed++;
         }
 
+        if (program.observed >= program.size) { return; }
+
         // skip comments
         if (CurrentChar() == ';') {
             while (
@@ -373,7 +460,6 @@ void _PrintLocationAndError() {
 void _PrintError(void) {
     fprintf(stderr, TEXT_BOLD_RED("error: "));
 }
-
 
 void ReportError(Error err) {
     // When error occured position may point to the: 
@@ -476,7 +562,7 @@ void ReportError(Error err) {
     default:
         _PrintError();
         fprintf(stderr, "error\n");
-        break;
+        return;
     }
     fprintf(stderr, "%5zu | %.*s\n", program.position.row + 1, (int) (end - start), program.text + start);
     fprintf(stderr, "      | " "%*s", (int) (program.position.col - (program.observed - wordStart)), "");
@@ -484,9 +570,6 @@ void ReportError(Error err) {
     for (size_t i = 0; i < wordEnd - wordStart; i++) fprintf(stderr, TEXT_BOLD_RED("~"));
     fprintf(stderr, "\n");
 }
-
-Word current = RESERVED;
-Word oldCurrent = RESERVED;
 
 void RestoreCurrentAfterFirstPass() {
     current = oldCurrent;
@@ -523,11 +606,8 @@ Error ParseIdent(char* identBuffer) {
     } 
     if (idx == MAX_IDENT_LENGTH + 1) return ERR_IDENT_TOO_LONG;
     identBuffer[idx] = '\0';
-    // LOG_DEBUG("%s\n", identBuffer);
     return NO_ERROR;
 }
-
-// void NextWhitespace() {}
 
 Error FirstPass(void) {
     char ident[MAX_IDENT_LENGTH + 1];
@@ -535,6 +615,9 @@ Error FirstPass(void) {
     IdentInfo identInfo = {0};
     while (program.observed < program.size) {
         SkipUnnecessary();
+        if (program.observed >= program.size) {
+            break;
+        }
 
         // label
         if (CurrentChar() == ':') {
@@ -583,14 +666,12 @@ Error FirstPass(void) {
             IsLetter(CurrentChar())
             || CurrentChar() == '_'
         ) {
-            // LOG_DEBUG("ident parse\n");
             current++;
             err = ParseIdent(ident);
             if (err) return err;
             if (!(program.observed == program.size) && !IsWhitespace(CurrentChar())) {
                 return ERR_UNEXPECTED_CHARACTER;
             }
-            // LOG_DEBUG("ident parse end %s\n", ident);
             continue;
         }
 
@@ -614,12 +695,14 @@ Error SecondPass(void) {
     char ident[MAX_IDENT_LENGTH + 1];
     Error err = NO_ERROR;
     IdentInfo identInfo = {0};
-    // printf("cur %d\n", current);
     while (program.observed < program.size) {
-        // printf("cur  %d\n", current);
-        // LOG_DEBUG("pass step\n");
         SkipUnnecessary();
+        if (program.observed >= program.size) {
+            break;
+        }
+
         Position startPos = program.position;
+
         // label
         if (CurrentChar() == ':') {
             while (program.observed < program.size && !IsWhitespace(CurrentChar())) {
@@ -691,6 +774,17 @@ Error SecondPass(void) {
     return NO_ERROR;
 }
 
+bool PrintProgram(void) {
+    IdentInfo ii;
+    bool err = GetIdent("PROGRAM_SIZE", &ii);
+    if (err) { return err; }
+    for (Word i = RESERVED; i < ii.address; i++) {
+        printf("%3d %4d    %s:%zu:%zu\n", i, M[i], files[coords[i].filenameIndex],
+               coords[i].pos.row + 1, coords[i].pos.col + 1);
+    }
+    return false;
+}
+
 bool TranslateProgram(void) {
     bool errOccured = false;
     Error err = NO_ERROR;
@@ -730,7 +824,7 @@ bool TranslateFromFile(char *filename) {
     if (err) {
         ReportError(err);
         return true;
-    };
+    }
     return TranslateProgram();
 }
 
@@ -748,19 +842,6 @@ bool TranslateFromFiles(int nFiles, char *filenames[]) {
     }
     return errOccured;
 }
-
-typedef struct {
-    char name[PLUGIN_NAME_MAX_LENGTH + 1];
-    bool (*InitPlugin)(void**);
-    void (*BeforeExecution)(void*, Command);
-    void (*AfterExecution)(void*, Command);
-} Plugin;
-
-struct {
-    Plugin plugins[N_MAX_PLUGINS];
-    size_t size;
-    void* userDataPointers[N_MAX_PLUGINS];
-} plugins = {0};
 
 Error AddPlugin(Plugin* p) {
     if (plugins.size >= N_MAX_PLUGINS) return ERR_TOO_MANY_PLUGINS;
@@ -783,45 +864,33 @@ void PLUGIN_AFTER_EXEC_DUMMY(void* addr, Command cmd) {
     (void) cmd;
 }
 
-struct {
-    Word IP;
-    Word SP;
-    Word FP;
-    Word RV;
-} registers = {
-    .IP = RESERVED,
-    .SP = SIZE,
-    .FP = UNDEF,
-    .RV = UNDEF,
-};
-
-typedef struct {
-    bool stepByStepInterpretation;
-} InterpretParams;
-
 Word Interpret(InterpretParams p) {
     Word x, y, z, v, a, c;
     Word returnValue;
+
     // plugins
     for (size_t i = 0; i < plugins.size; i++) {
         Plugin p = plugins.plugins[i];
         bool err = p.InitPlugin(plugins.userDataPointers + i);
         if (err) {
             _PrintError();
-            printf("plugin \"%s\" falied to initialize\n", p.name);
+            fprintf(stderr, "plugin \"%s\" falied to initialize\n", p.name);
             return -1;
         } else {
             LOG_DEBUG("plugin \"%s\" initialized\n", p.name);
         }
     }
+
     size_t step = 1;
     while (true) {
         Word cmd = M[registers.IP++];
+
         // plugins
         for (size_t i = 0; i < plugins.size; i++) {
             Plugin p = plugins.plugins[i];
             p.BeforeExecution(plugins.userDataPointers[i], cmd);
         }
+
         switch (cmd) {
         case ADD:
             y = M[registers.SP++];
@@ -1032,6 +1101,7 @@ Word Interpret(InterpretParams p) {
             Plugin p = plugins.plugins[i];
             p.AfterExecution(plugins.userDataPointers[i], cmd);
         }
+
         if (p.stepByStepInterpretation) {
             printf("step %zu completed, press <Enter> to proceed", step);
             getchar();
@@ -1044,447 +1114,4 @@ Word Interpret(InterpretParams p) {
     return returnValue;
 }
 
-
-///////////////////////////////////////////////////////////////////
-
-/////////////////////////
-// a-la valgrind 
-/////////////////////////
-typedef struct {
-    bool isDefined[SIZE];
-    bool isDefIP;
-    bool isDefSP;
-    bool isDefFP;
-    bool isDefRV;
-    Word progSize;
-} MemOverseerData;
-
-
-bool InitMemOverseer(void** userData) { 
-    MemOverseerData* od = (MemOverseerData*) calloc(1, sizeof(MemOverseerData));
-    if (!od) { return true; }
-    if (GetProgramSize(&od->progSize)) { return true; }
-    // od->isDefined = {false, false, ..., false} 'cause of calloc()
-    *userData = (void*) od;
-    return false;
-}
-
-bool CheckStackPop(MemOverseerData* od, int n) {
-    Word from = registers.SP;
-    Word to = registers.SP + n;
-    bool underflowFlag = false;
-    bool notDefinedFlag = false;
-    for (Word i = from; i < to; i++) {
-        if (i >= SIZE) {
-            printf("WARNING: next instruction will cause stack underflow\n");
-            underflowFlag = true;
-        }
-        if (!od->isDefined[i]) {
-            printf("WARNING: next instuction operates with undefined stack element\n");
-            notDefinedFlag = true;
-        }
-        if (underflowFlag || notDefinedFlag) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-void BeforeExecMemOverseer(void* userData, Command cmd) {
-    MemOverseerData* od = (MemOverseerData*) userData;
-    // check IP
-    if (!(RESERVED <= registers.IP && registers.IP <= od->progSize)) {
-        printf("WARNING: IP is out of range [RESERVED, PROGRAM_SIZE]\n");
-        printf("    IP = %d\n", registers.IP);
-        printf("    RESERVED = %d\n", RESERVED);
-        printf("    PROGRAM_SIZE = %d\n", od->progSize);
-    }
-    // check SP
-    if (!(od->progSize < registers.SP)) {
-        printf("WARNING: stack overflow, SP <= PROGRAM_SIZE\n");
-        printf("    SP = %d\n", registers.SP);
-        printf("    PROGRAM_SIZE = %d\n", od->progSize);
-    } else if (!(registers.SP <= SIZE)) {
-        printf("WARNING: stack underflow, SP > SIZE\n");
-        printf("    SP = %d\n", registers.SP);
-        printf("    SIZE = %d\n", SIZE);
-    }
-    Word a;
-    switch (cmd) {
-        case ADD:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x + y;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            break;
-        case SUB:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x - y;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            break;
-        case MUL:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x * y;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            break;
-        case DIV:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x / y;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            break;
-        case MOD:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x % y;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            break;
-        case NEG:
-            CheckStackPop(od, 1);
-            // M[registers.SP] = -M[registers.SP];
-            break;
-        case BITAND:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x & y;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            break;
-        case BITOR:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x | y;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            break;
-        case BITXOR:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x ^ y;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            break;
-        case BITNOT:
-            // M[registers.SP] = ~M[registers.SP];
-            CheckStackPop(od, 1);
-            break;
-        case LSHIFT:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x << y;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;    
-            break;
-        case RSHIFT:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x >> y;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            break;
-        case DUP:
-            // x = M[registers.SP];
-            // M[--registers.SP] = x;
-            CheckStackPop(od, 1);
-            od->isDefined[registers.SP - 1] = true;
-            break;
-        case DROP:
-            // registers.SP++;
-            od->isDefined[registers.SP] = false;
-            break;
-        case SWAP:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = y;
-            // M[--registers.SP] = x;
-            CheckStackPop(od, 2);
-            break;
-        case ROT:
-            // z = M[registers.SP++];
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = y;
-            // M[--registers.SP] = z;
-            // M[--registers.SP] = x;
-            CheckStackPop(od, 3);
-            break;
-        case OVER:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x;
-            // M[--registers.SP] = y;
-            // M[--registers.SP] = x;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP - 1] = true;
-            break;
-        case SDROP:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = y;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            break;
-        case DROP2:
-            od->isDefined[registers.SP] = false;
-            od->isDefined[registers.SP + 1] = false;
-            // registers.SP++;
-            // registers.SP++;
-            break;
-        case LOAD:
-            // a = M[registers.SP++];
-            // M[--registers.SP] = M[a];
-            CheckStackPop(od, 1);
-            if (!od->isDefined[M[registers.SP]]) {
-                printf("WARNING: loading variable from undefined element of stack\n");
-            }
-            break;
-        case SAVE:
-            // v = M[registers.SP++];
-            // a = M[registers.SP++];
-            // M[a] = v;
-            CheckStackPop(od, 2);
-            a = M[registers.SP + 1]; 
-            if (a <= od->progSize) {
-                printf("WARNING: saving word to program memory or reserved memory\n");
-            } else if (a >= SIZE) {
-                printf("ERROR: saving word outside of memory\n");
-            }
-            if (a < SIZE) od->isDefined[a] = true;
-            break;
-        case GETIP:
-            // M[--registers.SP] = registers.IP;
-            od->isDefined[registers.SP - 1] = true;
-            break;
-        case GETSP:
-            // x = registers.SP;
-            // M[--registers.SP] = x;
-            od->isDefined[registers.SP - 1] = true;
-            break;
-        case GETFP:
-            // M[--registers.SP] = registers.FP;
-            if (!od->isDefFP) {
-                printf("WARNING: trying to get FP value but FP is undefined\n");
-            }
-            od->isDefined[registers.SP - 1] = true;
-            break;
-        case GETRV:
-            // M[--registers.SP] = registers.RV;
-            if (!od->isDefRV) {
-                printf("WARNING: trying to get RV value but RV is undefined\n");
-            }
-            od->isDefined[registers.SP - 1] = true;
-            break;
-        // case SETIP: === JMP
-        //     break;
-        case SETSP:
-            // a = M[registers.SP++];
-            // registers.SP = a;
-            CheckStackPop(od, 1);
-            od->isDefined[registers.SP] = false;
-            break;
-        case SETFP:
-            // a = M[registers.SP++];
-            // registers.FP = a;
-            CheckStackPop(od, 1);
-            od->isDefined[registers.SP] = false;
-            od->isDefFP = true;
-            break;
-        case SETRV:
-            // a = M[registers.SP++];
-            // registers.RV = a;
-            CheckStackPop(od, 1);
-            od->isDefined[registers.SP] = false;
-            od->isDefRV = true;
-            break;
-        case CMP:
-            // y = M[registers.SP++];
-            // x = M[registers.SP++];
-            // M[--registers.SP] = x < y 
-            //                     ? -1 
-            //                     : (x > y ? 1 : 0);
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            break;
-        case JMP:
-            // a = M[registers.SP++];
-            // registers.IP = a;
-            CheckStackPop(od, 1);
-            od->isDefined[registers.SP] = false;
-            break;
-        case JLT:
-            // a = M[registers.SP++];
-            // x = M[registers.SP++];
-            // if (x < 0) registers.IP = a;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            od->isDefined[registers.SP + 1] = false;
-            break;
-        case JGT:
-            // a = M[registers.SP++];
-            // x = M[registers.SP++];
-            // if (x > 0) registers.IP = a;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            od->isDefined[registers.SP + 1] = false;
-            break;
-        case JEQ:
-            // a = M[registers.SP++];
-            // x = M[registers.SP++];
-            // if (x == 0) registers.IP = a;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            od->isDefined[registers.SP + 1] = false;
-            break;
-        case JLE:
-            // a = M[registers.SP++];
-            // x = M[registers.SP++];
-            // if (x <= 0) registers.IP = a;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            od->isDefined[registers.SP + 1] = false;
-            break;
-        case JGE:
-            // a = M[registers.SP++];
-            // x = M[registers.SP++];
-            // if (x >= 0) registers.IP = a;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            od->isDefined[registers.SP + 1] = false;
-            break;
-        case JNE:
-            // a = M[registers.SP++];
-            // x = M[registers.SP++];
-            // if (x != 0) registers.IP = a;
-            CheckStackPop(od, 2);
-            od->isDefined[registers.SP] = false;
-            od->isDefined[registers.SP + 1] = false;
-            break;
-        case CALL:
-            // a = M[registers.SP++];
-            // M[--registers.SP] = registers.IP;
-            // registers.IP = a;
-            CheckStackPop(od, 1);
-            break;
-        // case RET: === JMP
-        //     break;
-        case RET2:
-            // a = M[registers.SP++];
-            // registers.SP++;
-            // registers.IP = a;
-            CheckStackPop(od, 1);
-            od->isDefined[registers.SP] = false;
-            od->isDefined[registers.SP + 1] = false;
-            break;
-        case IN:
-            // PrintRegisters();
-            // printf("wtf\n");
-            // M[--registers.SP] = (Word) getchar();
-            od->isDefined[registers.SP - 1] = true;
-            break;
-        case OUT:
-            // c = M[registers.SP++];
-            // putchar((int) c);
-            CheckStackPop(od, 1);
-            od->isDefined[registers.SP] = false;
-            break;
-        case HALT:
-            // return M[registers.SP++];
-            CheckStackPop(od, 1);
-            od->isDefined[registers.SP] = false;
-            break;
-        default:
-            // if (cmd < 0) {
-            //     _PrintError();
-            //     printf("unknown instruction with code %d\n", cmd);
-            //     return 1;
-            // } else {
-            //     M[--registers.SP] = cmd;
-            // }
-            od->isDefined[registers.SP - 1] = true;
-            break;
-    }
-}
-
-/////////////////////////
-// a-la gdb debugger
-/////////////////////////
-
-void CheckReservedMemoryAndRegisters(void) {
-    printf("-----------" TEXT_BOLD("REGISTERS") "------------\n");
-    printf("IP = %08X  (%d)\n", registers.IP, registers.IP);
-    printf("SP = %08X  (%d)\n", registers.SP, registers.SP);
-    printf("FP = %08X  (%d)\n", registers.FP, registers.FP);
-    printf("RV = %08X  (%d)\n", registers.RV, registers.RV);
-    printf("--------------------------------\n");
-    bool nonZeroFound = false;
-    printf("-----" TEXT_BOLD("RESERVED MEMORY START") "------\n");
-    printf("<  only non-zeros are printed  >\n");
-    for (size_t i = 0; i < RESERVED; i++) {
-        if (M[i] != 0) {
-            nonZeroFound = true;
-            printf("[%08lX] %8X  (%d) WARNING - NOT NULL VALUE!\n", i, M[i], M[i]);
-        } 
-    }
-    if (!nonZeroFound) {
-        printf("------reserved memory " TEXT_BOLD_GREEN("okay") "------\n");
-    }
-    printf("------" TEXT_BOLD("RESERVED MEMORY END") "-------\n");
-}
-
-void AfterExecMemoryDump(void* userData, Command cmd) {
-    (void) userData;
-    (void) cmd;
-    CheckReservedMemoryAndRegisters();
-    size_t minZerosWindow = 8;
-    size_t i = RESERVED;
-    size_t zeros_start = 0;
-    size_t zeros_end = 0;
-    printf("-------" TEXT_BOLD("MAIN MEMORY START") "--------\n");
-    while (i < SIZE) {
-        if (M[i] == 0) {
-            zeros_start = i;
-            while (i < SIZE && M[i] == 0) {
-                i++;
-            }
-            zeros_end = i - 1;
-            if (zeros_end - zeros_start + 1 > minZerosWindow) {
-                printf("[%08lX] %8X  (%d)\n", zeros_start, M[zeros_start], M[zeros_start]);
-                printf("...\n");
-                printf("[%08lX] %8X  (%d)\n", zeros_end, M[zeros_end], M[zeros_end]);
-            } else {
-                for (size_t j = zeros_start; j < zeros_end + 1; j++) {
-                    printf("[%08lX] %8X  (%d)\n", i, M[j], M[j]);
-                }
-            }
-            
-            continue;
-        } else {
-            printf("[%08lX] %8X  (%d)\n", i, M[i], M[i]);
-            i++;
-            continue;
-        }
-    }
-    printf("--------" TEXT_BOLD("MAIN MEMORY END") "---------\n");
-}
-
-Plugin MemOverseerPlugin = (Plugin) {
-    .name = "MemOverseer",
-    .InitPlugin = InitMemOverseer,
-    .BeforeExecution = BeforeExecMemOverseer,
-    .AfterExecution = PLUGIN_AFTER_EXEC_DUMMY,
-};
-
-Plugin MemoryDumpPlugin = (Plugin) {
-    .name = "MemoryDump",
-    .InitPlugin = PLUGIN_INIT_DUMMY,
-    .BeforeExecution = PLUGIN_BEFORE_EXEC_DUMMY,
-    .AfterExecution = AfterExecMemoryDump,
-};
+#endif // BIPCA_IMPLEMENTATION

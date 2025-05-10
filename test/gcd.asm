@@ -1,0 +1,55 @@
+GETSP _MEMORY_SIZE SWAP SAVE
+_main CALL
+GETRV HALT
+:_MEMORY_SIZE 0
+:_PROGRAM_SIZE PROGRAM_SIZE
+:_Counter 
+0 
+:_pointers 
+_Counter _gcd 
+:_gcd 
+GETFP GETSP SETFP 
+GETSP 1 SUB SETSP 
+
+:c__while_loop_1 
+GETFP 3 ADD 
+LOAD 
+0 
+CMP c__if_cond_2 JNE c__end_while_3 JMP 
+:c__if_cond_2 
+GETFP 1 SUB 
+GETFP 2 ADD 
+LOAD 
+GETFP 3 ADD 
+LOAD 
+MOD 
+SAVE 
+GETFP 2 ADD 
+GETFP 3 ADD 
+LOAD 
+SAVE 
+GETFP 3 ADD 
+GETFP 1 SUB 
+LOAD 
+SAVE 
+c__while_loop_1 JMP 
+:c__end_while_3 
+GETFP 2 ADD 
+LOAD 
+SETRV 
+c__gcd0 JMP 
+
+:c__gcd0 
+GETFP SETSP SETFP SDROP SDROP RET 
+:_main 
+GETFP GETSP SETFP 
+GETSP 0 SUB SETSP 
+
+48 
+84 
+_gcd CALL GETRV 
+SETRV 
+c__main4 JMP 
+
+:c__main4 
+GETFP SETSP SETFP RET 

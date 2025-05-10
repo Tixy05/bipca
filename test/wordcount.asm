@@ -6,31 +6,32 @@ main JMP
 
 :wc
     0 SETRV
-    wc_loop JMP
-    :wc_reset_g_inside_word
-        0 g_is_inside_word SAVE
-    :wc_loop
-        IN
-        DUP 44 CMP wc_reset_g_inside_word JEQ
-        DUP 46 CMP wc_reset_g_inside_word JEQ
-        DUP 59 CMP wc_reset_g_inside_word JEQ
-        DUP 63 CMP wc_reset_g_inside_word JEQ
-        DUP 33 CMP wc_reset_g_inside_word JEQ
-        DUP 32 CMP wc_reset_g_inside_word JEQ
-        DUP 9 CMP wc_reset_g_inside_word JEQ
+    :loop
+    IN ; ... c
+    DUP 44 CMP sep JEQ
+    DUP 46 CMP sep JEQ
+    DUP 59 CMP sep JEQ
+    DUP 63 CMP sep JEQ
+    DUP 33 CMP sep JEQ
+    DUP 32 CMP sep JEQ
+    DUP 9 CMP sep JEQ
 
-        DUP 10 CMP wc_end JEQ
-        DUP 13 CMP wc_end JEQ
+    DUP 10 CMP end JEQ
+    DUP 13 CMP end JEQ
 
-        ; not sep and not newline
-        g_is_inside_word LOAD wc_loop JNE
-        GETRV 1 ADD SETRV
-        1 g_is_inside_word SAVE
-        wc_loop JMP
-    :wc_end
-        DROP
-        RET
-
+    g_is_inside_word LOAD do_not_inc_rv JNE ; ... c -> ... 
+    g_is_inside_word 1 SAVE
+    GETRV 1 ADD SETRV
+:do_not_inc_rv
+    DROP
+    loop JMP
+:sep
+    g_is_inside_word 0 SAVE
+    DROP
+    loop JMP
+:end
+    DROP
+    RET
 
 :main
     wc CALL

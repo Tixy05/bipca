@@ -18,7 +18,7 @@ To create a plugin one must define three functions:
 - virtual machine memory size is `SIZE`;
 - memory is an array of size `SIZE` and of type `Word` called `M`;
 - `RESERVED` number of words at the start of `M` are reserved so program
-   starts at `M[RESERVED]`. This words should be always equal 0;
+  starts at `M[RESERVED]`. This words should be always equal 0;
 - use `bool GetProgramSize(Word* ProgramSize)` to get program size, note
   that function could fail (returns true) but if translator works correctly
   it should not. **Note:** program size is not the <<actual>> size of a program,
@@ -38,7 +38,6 @@ To create a plugin one must define three functions:
 /////////////////////////
 // a-la valgrind 
 /////////////////////////
-
 typedef struct {
     bool isDefined[SIZE];
     bool isDefIP;
@@ -51,7 +50,7 @@ typedef struct {
 bool InitMemOverseer(void** userData) { 
     MemOverseerData* od = (MemOverseerData*) calloc(1, sizeof(MemOverseerData));
     if (!od) { return true; }
-    if (!GetProgramSize(&od->progSize)) { return true; }
+    if (GetProgramSize(&od->progSize)) { return true; }
     // od->isDefined = {false, false, ..., false} 'cause of calloc()
     *userData = (void*) od;
     return false;
@@ -83,18 +82,18 @@ void BeforeExecMemOverseer(void* userData, Command cmd) {
     MemOverseerData* od = (MemOverseerData*) userData;
     // check IP
     if (!(RESERVED <= registers.IP && registers.IP <= od->progSize)) {
-        printf("WARNING: IP is out of range [RESERVED, PROGRAM_SIZE]\n");
+        printf(TEXT_BOLD_CYAN("WARNING:") " IP is out of range [RESERVED, PROGRAM_SIZE]\n");
         printf("    IP = %d\n", registers.IP);
         printf("    RESERVED = %d\n", RESERVED);
         printf("    PROGRAM_SIZE = %d\n", od->progSize);
     }
     // check SP
     if (!(od->progSize < registers.SP)) {
-        printf("WARNING: stack overflow, SP <= PROGRAM_SIZE\n");
+        printf(TEXT_BOLD_CYAN("WARNING:") " stack overflow, SP <= PROGRAM_SIZE\n");
         printf("    SP = %d\n", registers.SP);
         printf("    PROGRAM_SIZE = %d\n", od->progSize);
     } else if (!(registers.SP <= SIZE)) {
-        printf("WARNING: stack underflow, SP > SIZE\n");
+        printf(TEXT_BOLD_CYAN("WARNING:") " stack underflow, SP > SIZE\n");
         printf("    SP = %d\n", registers.SP);
         printf("    SIZE = %d\n", SIZE);
     }
@@ -230,20 +229,24 @@ void BeforeExecMemOverseer(void* userData, Command cmd) {
             // a = M[registers.SP++];
             // M[--registers.SP] = M[a];
             CheckStackPop(od, 1);
-            if (!od->isDefined[M[registers.SP]]) {
-                printf("WARNING: loading variable from undefined element of stack\n");
-            }
+            // if (!od->isDefined[M[registers.SP]]) {
+            //     printf(TEXT_BOLD_CYAN("WARNING:") " loading variable from undefined element of stack\n");
+            // }
             break;
         case SAVE:
             // v = M[registers.SP++];
             // a = M[registers.SP++];
             // M[a] = v;
             CheckStackPop(od, 2);
-            a = M[registers.SP + 1]; 
-            if (a <= od->progSize) {
-                printf("WARNING: saving word to program memory or reserved memory\n");
+            a = M[registers.SP + 1];
+            if (a < 0) {
+                printf(TEXT_BOLD_RED("ERROR:") " saving word outside of memory (address too low)\n");
+            } else if (a < RESERVED) {
+                printf(TEXT_BOLD_CYAN("WARNING:") " saving word to reserved memory\n");
+            } else if (a <= od->progSize) {
+                // printf(TEXT_BOLD_CYAN("WARNING:") " saving word to program memory\n");
             } else if (a >= SIZE) {
-                printf("ERROR: saving word outside of memory\n");
+                printf(TEXT_BOLD_RED("ERROR:") " saving word outside of memory (address too high)\n");
             }
             if (a < SIZE) od->isDefined[a] = true;
             break;
@@ -259,14 +262,14 @@ void BeforeExecMemOverseer(void* userData, Command cmd) {
         case GETFP:
             // M[--registers.SP] = registers.FP;
             if (!od->isDefFP) {
-                printf("WARNING: trying to get FP value but FP is undefined\n");
+                printf(TEXT_BOLD_CYAN("WARNING:") " trying to get FP value but FP is undefined\n");
             }
             od->isDefined[registers.SP - 1] = true;
             break;
         case GETRV:
             // M[--registers.SP] = registers.RV;
             if (!od->isDefRV) {
-                printf("WARNING: trying to get RV value but RV is undefined\n");
+                printf(TEXT_BOLD_CYAN("WARNING:") " trying to get RV value but RV is undefined\n");
             }
             od->isDefined[registers.SP - 1] = true;
             break;
@@ -401,7 +404,6 @@ void BeforeExecMemOverseer(void* userData, Command cmd) {
     }
 }
 
-
 /////////////////////////
 // a-la gdb debugger
 /////////////////////////
@@ -456,7 +458,13 @@ void AfterExecMemoryDump(void* userData, Command cmd) {
             
             continue;
         } else {
-            printf("[%08lX] %8X  (%d)\n", i, M[i], M[i]);
+            if (registers.SP == i) {
+                printf(TEXT_BOLD("[%08lX] %8X  (%d)") TEXT_BOLD_GREEN(" < SP") "\n", i, M[i], M[i]);    
+            } else if (registers.IP == i) {
+                printf(TEXT_BOLD("[%08lX] %8X  (%d)") TEXT_BOLD_GREEN(" < IP") "\n", i, M[i], M[i]);    
+            } else {
+                printf("[%08lX] %8X  (%d)\n", i, M[i], M[i]);
+            }
             i++;
             continue;
         }
